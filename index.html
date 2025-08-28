@@ -40,7 +40,7 @@
       <option>Spore</option>
     </select>
 
-    <label>Speed (slower → faster)</label>
+    <label>Speed (faster → slower)</label>
     <input id="speed" type="range" min="40" max="200" step="5" value="120">
 
     <label>Min size</label>
@@ -249,10 +249,10 @@
       // Titles
       fill(20);
       textAlign(CENTER);
-      text('Pathway 1', X_CENTER, ROW_Y[0] - 30);
-      text('Pathway 2', X_CENTER, ROW_Y[1] - 30);
-      text('Pathway 3', X_CENTER, ROW_Y[2] - 30);
-      text('Pathway 4', X_CENTER, ROW_Y[3] - 30);
+      text('Pathway ', X_CENTER, ROW_Y[0] - 30);
+      text('Pathway ', X_CENTER, ROW_Y[1] - 30);
+      text('Pathway ', X_CENTER, ROW_Y[2] - 30);
+      text('Pathway ', X_CENTER, ROW_Y[3] - 30);
 
       // Likelihood (left) & Impact (right)
       textAlign(RIGHT);
@@ -402,3 +402,4 @@
   </script>
 </body>
 </html>
+
