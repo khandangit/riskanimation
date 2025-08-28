@@ -4,19 +4,31 @@
   <title>Interactive Pathway Animation (p5.js)</title>
   <meta charset="utf-8">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.2/p5.min.js"></script>
-  <!-- CCapture for recording GIF/WebM -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/ccapture.js/1.1.0/CCapture.all.min.js"></script>
   <style>
     :root { --ui-gap: 10px; }
     body { margin: 0; padding: 0; display: flex; flex-direction: column; align-items: center; font-family: system-ui, Arial, sans-serif; background: #f6f7f9; }
-    #ui { display: grid; grid-template-columns: repeat(11, auto); gap: var(--ui-gap); align-items: center; padding: 12px; background: #fff; border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.08); margin: 12px; }
+    #ui {
+      display: grid;
+      grid-template-columns: repeat(12, auto);
+      gap: var(--ui-gap);
+      align-items: center;
+      padding: 12px;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+      margin: 12px;
+    }
     #ui > * { margin: 0; }
     label { font-size: 12px; color: #333; }
+    input[type="text"] { padding: 6px 8px; border: 1px solid #ddd; border-radius: 8px; }
     button { padding: 6px 10px; border-radius: 8px; border: 1px solid #ddd; background: #fafafa; cursor: pointer; }
     button:hover { background: #f0f0f0; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #playBtn { background: #4caf50; color: white; }
+    #playBtn:hover { background: #43a047; }
+    #status { font-size: 12px; color: #444; padding: 4px 8px; background: #f3f6ff; border: 1px solid #d7e2ff; border-radius: 8px; }
     canvas { display: block; background: #fff; border-radius: 12px; box-shadow: 0 10px 24px rgba(0,0,0,0.12); }
-    @media (max-width: 1100px) { #ui { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 1200px) { #ui { grid-template-columns: 1fr 1fr; } }
   </style>
 </head>
 <body>
@@ -26,8 +38,6 @@
       <option>Bug</option>
       <option>Virus</option>
       <option>Spore</option>
-      <option>Droplet</option>
-      <option>Mite</option>
     </select>
 
     <label>Speed (slower → faster)</label>
@@ -40,12 +50,12 @@
     <input id="sizeMax" type="range" min="30" max="80" step="1" value="50">
 
     <button id="pauseBtn">Pause</button>
-    <button id="restartBtn">Restart</button>
-    <button id="saveBtn">Save PNG</button>
+    <button id="playBtn">Play</button>
 
-    <button id="recGifBtn" title="Record as animated GIF">Record GIF</button>
     <button id="recWebmBtn" title="Record as WebM video">Record WebM</button>
     <button id="stopSaveBtn" disabled>Stop &amp; Save</button>
+
+    <span id="status">Idle</span>
   </div>
 
   <script>
@@ -53,10 +63,10 @@
     const CAN_W = 1000, CAN_H = 420;
     const X_START = 150, X_END = 550, X_CENTER = (X_START + X_END) / 2;
     const ROW_Y = [80, 160, 240, 320];
-    const LEFT_TEXT_X = 130;   // left labels close to the line start
-    const RIGHT_TEXT_X = 570;  // right labels just after line end
+    const LEFT_TEXT_X = 130;
+    const RIGHT_TEXT_X = 570;
 
-    // Colours per pathway (nice palette)
+    // Colours per pathway
     const PATH_COLOURS = [
       { fill: [52, 120, 246], stroke: [30, 80, 210] },   // Pathway 1 - blue
       { fill: [0, 168, 125],  stroke: [0, 120, 88] },    // Pathway 2 - green
@@ -65,25 +75,35 @@
     ];
 
     // DOM refs
-    let shapeSel, speedSlider, sizeMinSlider, sizeMaxSlider, pauseBtn, restartBtn, saveBtn;
-    let recGifBtn, recWebmBtn, stopSaveBtn;
+    let shapeSel, speedSlider, sizeMinSlider, sizeMaxSlider, pauseBtn, playBtn, statusEl;
+    let recWebmBtn, stopSaveBtn;
 
     // Animation state
     let paused = false;
     let t = 0;            // logical time 0..6
     let finished = false; // reached the end once (no loop)
-
-    // Explosions for pathways with High Impact at end (3 & 4)
-    let explosions = []; // array of particle arrays
+    let explosions = [];  // particle systems
+    let finishedNotified = false;
 
     // Recording state
-    let capturer = null;
+    let canvasEl = null;
     let capturing = false;
-    let canvasEl = null; // p5 canvas HTML element
-    const GIF_WORKERS_PATH = 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/'; // must end with a trailing slash
+    let captureMode = null;   // 'webm' | null
+
+    // WebM recorder (MediaRecorder)
+    let mediaRecorder = null;
+    let webmChunks = [];
+
+    // Custom image for Virus
+    let virusImg;
+
+    function preload() {
+      virusImg = loadImage('virus.png'); // Load the saved image
+    }
 
     function setup() {
       const cnv = createCanvas(CAN_W, CAN_H);
+      pixelDensity(1); // avoid HiDPI scaling issues
       cnv.parent(document.body);
       canvasEl = cnv.canvas;
       noStroke();
@@ -96,74 +116,124 @@
       sizeMinSlider = document.getElementById('sizeMin');
       sizeMaxSlider = document.getElementById('sizeMax');
       pauseBtn      = document.getElementById('pauseBtn');
-      restartBtn    = document.getElementById('restartBtn');
-      saveBtn       = document.getElementById('saveBtn');
-      recGifBtn     = document.getElementById('recGifBtn');
+      playBtn       = document.getElementById('playBtn');
       recWebmBtn    = document.getElementById('recWebmBtn');
       stopSaveBtn   = document.getElementById('stopSaveBtn');
+      statusEl      = document.getElementById('status');
 
       pauseBtn.onclick = () => {
-        if (finished) return; // don't toggle after finish; use Restart
+        if (finished) return;
         paused = !paused;
-        pauseBtn.textContent = paused ? 'Play' : 'Pause';
+        pauseBtn.textContent = paused ? 'Play (pause off)' : 'Pause';
+        setStatus(paused ? 'Paused' : 'Playing');
       };
 
-      restartBtn.onclick = () => restartAnimation();
-      saveBtn.onclick = () => saveCanvas('risk_pathways', 'png');
+      playBtn.onclick = () => playFromStart();
 
-      recGifBtn.onclick = () => startRecording('gif');
       recWebmBtn.onclick = () => startRecording('webm');
       stopSaveBtn.onclick = () => stopAndSaveRecording();
+
+      setStatus('Idle');
     }
 
-    function restartAnimation() {
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    function playFromStart() {
       t = 0;
       paused = false;
       finished = false;
+      finishedNotified = false;
       explosions = [];
       pauseBtn.textContent = 'Pause';
-      loop(); // ensure draw keeps running
+      setStatus('Playing');
+      loop();
     }
 
-    function startRecording(format) {
-      if (capturing) return; // already recording
-      // Restart so we capture from the beginning
-      restartAnimation();
-
-      const fr = (format === 'gif') ? 20 : 30; // GIF a bit lower FPS to keep file size reasonable
-      const commonOpts = { framerate: fr, verbose: true, name: `pathways_${format}` };
-
-      if (format === 'gif') {
-        capturer = new CCapture({
-          format: 'gif',
-          workersPath: GIF_WORKERS_PATH, // CCapture will append gif.worker.js
-          ...commonOpts
-        });
-      } else {
-        capturer = new CCapture({
-          format: 'webm',
-          quality: 100, // highest quality webm
-          ...commonOpts
-        });
-      }
-
+    function startRecording(mode) {
+      if (capturing) return;
+      playFromStart(); // clean take from the beginning
+      captureMode = mode;
       capturing = true;
       updateRecordButtons();
-      capturer.start();
+
+      if (mode === 'webm') {
+        setStatus('Recording WebM…');
+        const fps = 30;
+        const stream = canvasEl.captureStream(fps);
+        webmChunks = [];
+        const opts = { mimeType: 'video/webm;codecs=vp9' };
+        try {
+          mediaRecorder = new MediaRecorder(stream, opts);
+        } catch (e) {
+          mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        }
+        mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) webmChunks.push(e.data); };
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(webmChunks, { type: 'video/webm' });
+          await saveBlobWithDialog(blob, 'webm', 'video/webm');
+          setStatus('Saved WebM ✅');
+          mediaRecorder = null;
+        };
+        mediaRecorder.start();
+      }
     }
 
-    function stopAndSaveRecording() {
+    async function stopAndSaveRecording() {
       if (!capturing) return;
-      capturer.stop();
-      capturer.save();
+      stopSaveBtn.disabled = true;
+      stopSaveBtn.textContent = 'Saving…';
+
+      if (captureMode === 'webm' && mediaRecorder) {
+        setStatus('Finalising WebM…');
+        mediaRecorder.stop(); // onstop will save via dialog/fallback
+        resetAfterSave();
+      }
+    }
+
+    function resetAfterSave() {
+      stopSaveBtn.disabled = false;
+      stopSaveBtn.textContent = 'Stop & Save';
       capturing = false;
+      captureMode = null;
       updateRecordButtons();
     }
 
     function updateRecordButtons() {
-      recGifBtn.disabled = capturing;
       recWebmBtn.disabled = capturing;
       stopSaveBtn.disabled = !capturing;
+    }
+
+    // Save helpers
+    async function saveBlobWithDialog(blob, ext, mime) {
+      const base = 'risk_pathways';
+      const name = `${base}.${ext}`;
+      if (window.showSaveFilePicker) {
+        try {
+          const handle = await window.showSaveFilePicker({
+            suggestedName: name,
+            types: [{ description: ext.toUpperCase(), accept: { [mime]: [`.${ext}`] } }]
+          });
+          const writable = await handle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return;
+        } catch (err) {
+          // user canceled or no gesture; fall back
+        }
+      }
+      await saveBlobFallback(blob, ext, mime);
+    }
+
+    async function saveBlobFallback(blob, ext, mime) {
+      const base = 'risk_pathways';
+      const name = `${base}.${ext}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 100);
     }
 
     function draw() {
@@ -200,13 +270,13 @@
       // --- Animation timing (no loop: stop at t=6)
       const speedDiv = Number(speedSlider.value); // larger = slower
       if (!paused && !finished) {
-        t += (1 / speedDiv) * 3; // tune multiplier for taste
+        t += (1 / speedDiv) * 3;
         if (t >= 6) {
           t = 6;
           finished = true;
-          // trigger explosions at end for pathways 3 & 4
           spawnExplosion(X_END, ROW_Y[2], PATH_COLOURS[2]);
           spawnExplosion(X_END, ROW_Y[3], PATH_COLOURS[3]);
+          if (!capturing) setStatus('Finished');
         }
       }
 
@@ -214,22 +284,22 @@
       const S_MIN = Number(sizeMinSlider.value);
       const S_MAX = Number(sizeMaxSlider.value);
 
-      // Position along path: hold at start until t>3, then move to end
+      // Position along path
       let xPos = (t <= 3) ? X_START : map(t, 3, 6, X_START, X_END);
 
-      // Keep initial sizes reflecting likelihood; apply changes only during movement
-      const p1Size = (t <= 3) ? S_MAX : map(t, 3, 6, S_MAX, S_MIN); // big then shrink
-      const p2Size = S_MIN;                                         // always small
-      const p3Size = (t <= 3) ? S_MIN : map(t, 3, 6, S_MIN, S_MAX); // small then grow
-      const p4Size = S_MAX;                                         // always big
+      // Likelihood-driven sizes
+      const p1Size = (t <= 3) ? S_MAX : map(t, 3, 6, S_MAX, S_MIN); // big→small
+      const p2Size = S_MIN;                                         // small constant
+      const p3Size = (t <= 3) ? S_MIN : map(t, 3, 6, S_MIN, S_MAX); // small→big
+      const p4Size = S_MAX;                                         // big constant
 
-      // Draw the moving markers per pathway (colourful)
+      // Markers
       setColours(0); drawMarker(shapeSel.value, xPos, ROW_Y[0], p1Size);
       setColours(1); drawMarker(shapeSel.value, xPos, ROW_Y[1], p2Size);
       setColours(2); drawMarker(shapeSel.value, xPos, ROW_Y[2], p3Size);
       setColours(3); drawMarker(shapeSel.value, xPos, ROW_Y[3], p4Size);
 
-      // If finished, keep markers at final state (visible alongside explosions)
+      // Final state
       if (finished) {
         setColours(0); drawMarker(shapeSel.value, X_END, ROW_Y[0], S_MIN);
         setColours(1); drawMarker(shapeSel.value, X_END, ROW_Y[1], S_MIN);
@@ -237,20 +307,18 @@
         setColours(3); drawMarker(shapeSel.value, X_END, ROW_Y[3], S_MAX);
       }
 
-      // Explosions (animate even after finished)
+      // Explosions
       updateExplosions();
 
-      // Capture frame if recording
-      if (capturing) {
-        capturer.capture(canvasEl);
-      }
-
-      // If finished and explosions burned out, stop draw() and auto-save recording
-      if (finished && explosions.length === 0) {
+      // Notify when finished
+      if (finished && explosions.length === 0 && !finishedNotified) {
+        finishedNotified = true;
         if (capturing) {
-          stopAndSaveRecording();
+          setStatus('Recording complete. Click "Stop & Save" to save.');
+        } else {
+          noLoop();
+          setStatus('Finished');
         }
-        noLoop(); // stop rendering to save CPU
       }
     }
 
@@ -261,88 +329,37 @@
       strokeWeight(1.5);
     }
 
-    // --- Marker drawing (pest/pathogen metaphors)
     function drawMarker(type, x, y, s) {
       push();
       switch (type) {
         case 'Bug':
-          // Fly emoji 🪰 for the bug shape (emoji itself provides colour)
           noStroke();
           textAlign(CENTER, CENTER);
           textSize(s * 1.2);
           text('🪰', x, y + s * 0.05);
           break;
-
         case 'Virus':
-          drawVirus(x, y, s); // uses current stroke/fill (colourful via setColours)
+          // Use the loaded image instead of drawing
+          image(virusImg, x - s / 2, y - s / 2, s, s);
           break;
-
         case 'Spore':
           ellipse(x, y, s, s);
           noStroke();
           fill(255, 255, 255, 100);
           ellipse(x, y, s * 0.35, s * 0.35);
           break;
-
-        case 'Droplet':
-          drawDroplet(x, y, s);
-          break;
-
-        case 'Mite':
-          drawMite(x, y, s);
-          break;
       }
       pop();
     }
 
-    function drawVirus(x, y, s) {
-      push();
-      ellipse(x, y, s, s); // core
-      const n = 10;
-      for (let i = 0; i < n; i++) {
-        const a = TWO_PI * i / n;
-        const ox = x + cos(a) * s * 0.45;
-        const oy = y + sin(a) * s * 0.45;
-        line(x, y, ox, oy);
-        ellipse(ox, oy, s * 0.15, s * 0.15);
-      }
-      pop();
-    }
-
-    function drawDroplet(x, y, s) {
-      push();
-      beginShape();
-      vertex(x, y - s / 2);
-      bezierVertex(x + s / 3, y - s / 4, x + s / 2, y, x, y + s / 2);
-      bezierVertex(x - s / 2, y, x - s / 3, y - s / 4, x, y - s / 2);
-      endShape(CLOSE);
-      pop();
-    }
-
-    function drawMite(x, y, s) {
-      push();
-      beginShape();
-      vertex(x, y - s * 0.5);
-      vertex(x + s * 0.45, y + s * 0.4);
-      vertex(x - s * 0.45, y + s * 0.4);
-      endShape(CLOSE);
-      for (let i = -1; i <= 1; i += 2) {
-        line(x + i * s * 0.3, y - s * 0.1, x + i * s * 0.7, y - s * 0.35);
-        line(x + i * s * 0.35, y + s * 0.05, x + i * s * 0.75, y + s * 0.05);
-        line(x + i * s * 0.3, y + s * 0.2, x + i * s * 0.7, y + s * 0.4);
-      }
-      pop();
-    }
-
-    // --- Explosions (for High Impact endpoints)
     function spawnExplosion(x, y, colour) {
       const parts = [];
-      const N = 60; // number of particles
+      const N = 60;
       for (let i = 0; i < N; i++) {
         const ang = random(TWO_PI);
         const spd = random(1.5, 4.5);
         parts.push({
-          x: x, y: y,
+          x, y,
           vx: cos(ang) * spd,
           vy: sin(ang) * spd,
           life: 0,
@@ -360,7 +377,7 @@
         for (let p of parts) {
           p.x += p.vx;
           p.y += p.vy;
-          p.vy += 0.05; // gravity
+          p.vy += 0.05;
           p.life++;
           const alpha = map(p.life, 0, p.maxLife, 255, 0);
           if (alpha > 0) {
@@ -378,7 +395,8 @@
     function mousePressed() {
       if (!finished && mouseX >= 0 && mouseX <= width && mouseY >= 0 && mouseY <= height) {
         paused = !paused;
-        pauseBtn.textContent = paused ? 'Play' : 'Pause';
+        pauseBtn.textContent = paused ? 'Play (pause off)' : 'Pause';
+        setStatus(paused ? 'Paused' : 'Playing');
       }
     }
   </script>
